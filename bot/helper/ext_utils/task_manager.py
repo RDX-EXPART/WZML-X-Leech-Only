@@ -1,0 +1,267 @@
+from asyncio import Event, gather
+from time import time
+
+from ... import (
+    LOGGER,
+    bot_cache,
+    non_queued_dl,
+    non_queued_up,
+    queue_dict_lock,
+    queued_dl,
+    queued_up,
+    task_dict,
+    user_data,
+)
+from ...core.config_manager import Config
+from ..telegram_helper.filters import CustomFilters
+from ..telegram_helper.button_build import ButtonMaker
+from ..telegram_helper.tg_utils import forcesub, verify_token
+from .bot_utils import safe_int
+from .files_utils import check_storage_threshold
+from .status_utils import get_readable_time, get_readable_file_size, get_specific_tasks
+
+
+async def stop_duplicate_check(listener):
+    # Cloud upload duplicate checks do not apply in the leech-only build.
+    return False, None
+
+
+async def check_running_tasks(listener, state="dl"):
+    all_limit = safe_int(Config.QUEUE_ALL)
+    state_limit = (
+        safe_int(Config.QUEUE_DOWNLOAD)
+        if state == "dl"
+        else safe_int(Config.QUEUE_UPLOAD)
+    )
+    event = None
+    is_over_limit = False
+    async with queue_dict_lock:
+        if state == "up" and listener.mid in non_queued_dl:
+            non_queued_dl.remove(listener.mid)
+        if (
+            (all_limit or state_limit)
+            and not listener.force_run
+            and not (listener.force_upload and state == "up")
+            and not (listener.force_download and state == "dl")
+        ):
+            dl_count = len(non_queued_dl)
+            up_count = len(non_queued_up)
+            t_count = dl_count if state == "dl" else up_count
+            is_over_limit = (
+                all_limit
+                and dl_count + up_count >= all_limit
+                and (not state_limit or t_count >= state_limit)
+            ) or (state_limit and t_count >= state_limit)
+            if is_over_limit:
+                event = Event()
+                if state == "dl":
+                    queued_dl[listener.mid] = event
+                else:
+                    queued_up[listener.mid] = event
+        if not is_over_limit:
+            if state == "up":
+                non_queued_up.add(listener.mid)
+            else:
+                non_queued_dl.add(listener.mid)
+
+    return is_over_limit, event
+
+
+async def start_dl_from_queued(mid: int):
+    queued_dl[mid].set()
+    del queued_dl[mid]
+    non_queued_dl.add(mid)
+
+
+async def start_up_from_queued(mid: int):
+    queued_up[mid].set()
+    del queued_up[mid]
+    non_queued_up.add(mid)
+
+
+async def start_from_queued():
+    if all_limit := safe_int(Config.QUEUE_ALL):
+        dl_limit = safe_int(Config.QUEUE_DOWNLOAD)
+        up_limit = safe_int(Config.QUEUE_UPLOAD)
+        async with queue_dict_lock:
+            dl = len(non_queued_dl)
+            up = len(non_queued_up)
+            all_ = dl + up
+            if all_ < all_limit:
+                f_tasks = all_limit - all_
+                if queued_up and (not up_limit or up < up_limit):
+                    for index, mid in enumerate(list(queued_up.keys()), start=1):
+                        await start_up_from_queued(mid)
+                        f_tasks -= 1
+                        if f_tasks == 0 or (up_limit and index >= up_limit - up):
+                            break
+                if queued_dl and (not dl_limit or dl < dl_limit) and f_tasks != 0:
+                    for index, mid in enumerate(list(queued_dl.keys()), start=1):
+                        await start_dl_from_queued(mid)
+                        if (dl_limit and index >= dl_limit - dl) or index == f_tasks:
+                            break
+        return
+
+    if up_limit := Config.QUEUE_UPLOAD:
+        async with queue_dict_lock:
+            up = len(non_queued_up)
+            if queued_up and up < up_limit:
+                f_tasks = up_limit - up
+                for index, mid in enumerate(list(queued_up.keys()), start=1):
+                    await start_up_from_queued(mid)
+                    if index == f_tasks:
+                        break
+    else:
+        async with queue_dict_lock:
+            if queued_up:
+                for mid in list(queued_up.keys()):
+                    await start_up_from_queued(mid)
+
+    if dl_limit := Config.QUEUE_DOWNLOAD:
+        async with queue_dict_lock:
+            dl = len(non_queued_dl)
+            if queued_dl and dl < dl_limit:
+                f_tasks = dl_limit - dl
+                for index, mid in enumerate(list(queued_dl.keys()), start=1):
+                    await start_dl_from_queued(mid)
+                    if index == f_tasks:
+                        break
+    else:
+        async with queue_dict_lock:
+            if queued_dl:
+                for mid in list(queued_dl.keys()):
+                    await start_dl_from_queued(mid)
+
+
+async def limit_checker(listener, yt_playlist=0):
+    LOGGER.info("Checking Size Limit...")
+    if await CustomFilters.sudo("", listener.message):
+        LOGGER.info("SUDO User. Skipping Size Limit...")
+        return
+
+    size = listener.size
+
+    async def recurr_limits(limits):
+        nonlocal yt_playlist, size
+        limit_exceeded = ""
+        for condition, attr, name in limits:
+            if condition and (limit := getattr(Config, attr, 0)):
+                if attr == "PLAYLIST_LIMIT":
+                    if yt_playlist >= limit:
+                        limit_exceeded = f"┠ <b>{name} Limit Count</b> → {limit}"
+                else:
+                    byte_limit = limit * 1024**3
+                    if size >= byte_limit:
+                        limit_exceeded = f"┠ <b>{name} Limit</b> → {get_readable_file_size(byte_limit)}"
+
+                LOGGER.info(
+                    f"{name} Limit Breached: {listener.name} & Size: {get_readable_file_size(size)}"
+                )
+                break
+        return limit_exceeded
+
+    limits = [
+        (listener.is_torrent or listener.is_qbit, "TORRENT_LIMIT", "Torrent"),
+        (listener.is_mega, "MEGA_LIMIT", "Mega"),
+        (listener.is_gdrive, "GD_DL_LIMIT", "GDriveDL"),
+        (listener.is_jd, "JD_LIMIT", "JDownloader"),
+        (listener.is_nzb, "NZB_LIMIT", "SABnzbd"),
+        (listener.is_rclone, "RC_DL_LIMIT", "RCloneDL"),
+        (True, "DIRECT_LIMIT", "Direct"),
+    ]
+    limit_exceeded = await recurr_limits(limits)
+
+    if not limit_exceeded:
+        extra_limits = [
+            (listener.is_leech, "LEECH_LIMIT", "Leech"),
+            (listener.compress, "ARCHIVE_LIMIT", "Archive"),
+            (listener.extract, "EXTRACT_LIMIT", "Extract"),
+        ]
+        limit_exceeded = await recurr_limits(extra_limits)
+
+        if Config.STORAGE_LIMIT and not listener.is_clone:
+            limit = Config.STORAGE_LIMIT * 1024**3
+            if not await check_storage_threshold(
+                size, limit, any([listener.compress, listener.extract])
+            ):
+                limit_exceeded = f"┠ <b>Threshold Storage Limit</b> → {get_readable_file_size(limit)}"
+
+    if limit_exceeded:
+        return limit_exceeded + f"\n┖ <b>Task By</b> → {listener.tag}"
+
+
+"""
+class UsageChecks: # TODO: Dynamic Check for All Task
+
+class DailyUsageChecks:
+"""
+
+
+async def user_interval_check(user_id):
+    bot_cache.setdefault("time_interval", {})
+    if (time_interval := bot_cache["time_interval"].get(user_id, False)) and (
+        time() - time_interval
+    ) < (UTI := Config.USER_TIME_INTERVAL):
+        return UTI - (time() - time_interval)
+    bot_cache["time_interval"][user_id] = time()
+    return None
+
+
+async def pre_task_check(message):
+    LOGGER.info("Running Pre Task Checks ...")
+    msg = []
+    button = None
+    user_id = (message.from_user or message.sender_chat).id
+    user_dict = user_data.get(user_id, {})
+
+    def _format_result():
+        username = message.from_user.mention
+        parts = [f"⌬ <b>Task Checks :</b>\n│\n┟ <b>Name</b> → {username}\n┃\n"]
+        for i, m_part in enumerate(msg, 1):
+            parts.append(m_part)
+        menu = button.build_menu(2) if button is not None else None
+        return "\n".join(parts), menu
+
+    if await CustomFilters.sudo("", message):
+        return None, None
+
+    if Config.RSS_CHAT and user_id == int(Config.RSS_CHAT):
+        return None, None
+
+    button = ButtonMaker()
+    checks = []
+    if message.chat.type != message.chat.type.BOT:
+        if Config.FORCE_SUB_IDS:
+            checks.append(forcesub(message, Config.FORCE_SUB_IDS, button))
+    checks.append(verify_token(user_id, button))
+
+    results = await gather(*checks)
+    for _msg, _ in results:
+        if _msg:
+            msg.append(_msg)
+
+    if (uti := Config.USER_TIME_INTERVAL) and (
+        ut := await user_interval_check(user_id)
+    ):
+        msg.append(
+            f"┠ <b>Waiting Time</b> → {get_readable_time(ut)}\n┠ <i>User's Time Interval Restrictions</i> → {get_readable_time(uti)}"
+        )
+
+    all_tasks = list(task_dict.values())
+    all_tasks_len = len(all_tasks)
+    bmax_tasks = safe_int(user_dict.get("bmax_tasks", Config.BOT_MAX_TASKS))
+    if bmax_tasks > 0 and all_tasks_len >= bmax_tasks:
+        msg.append(
+            f"┠ Max Concurrent Bot's Tasks Limit exceeded.\n┃ Bot Tasks Limit : {bmax_tasks} task"
+        )
+    maxtask = safe_int(user_dict.get("maxtask", Config.USER_MAX_TASKS))
+    if maxtask > 0:
+        user_tasks = [tk for tk in all_tasks if tk.listener.user_id == user_id]
+        if len(user_tasks) >= maxtask:
+            msg.append(
+                f"┠ Max Concurrent User's Task(s) Limit exceeded! \n┃ User Task Limit : {maxtask} tasks"
+            )
+
+    if msg:
+        return _format_result()
+    return None, None

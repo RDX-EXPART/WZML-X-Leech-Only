@@ -1,0 +1,110 @@
+# Required
+BOT_TOKEN = ""
+OWNER_ID = 0
+TELEGRAM_API = 0
+TELEGRAM_HASH = ""
+DATABASE_URL = ""
+
+# Access and bot behavior
+AUTHORIZED_CHATS = ""
+SUDO_USERS = ""
+CMD_SUFFIX = ""
+DEFAULT_LANG = "en"
+TIMEZONE = "Asia/Dubai"
+SET_COMMANDS = True
+DELETE_LINKS = False
+FORCE_SUB_IDS = ""
+VERIFY_TIMEOUT = 0
+LOGIN_PASS = ""
+
+# Telegram transfer
+USER_SESSION_STRING = ""
+HELPER_TOKENS = ""
+HELPER_STRINGS = ""
+TRANSMISSION_MODE = "both"  # bot, user or both
+USE_HYPER = True
+HYPER_THREADS = 0
+HYPER_PIPELINE = 4
+HYPER_CHUNK = 524288
+TG_PROXY = {}
+
+# Leech output
+# Each user MUST set their own dump channel with /usetting.
+# BOT_PM and global/custom upload destinations are disabled by code.
+LEECH_SPLIT_SIZE = 0
+AS_DOCUMENT = False
+EQUAL_SPLITS = False
+MEDIA_GROUP = False
+LEECH_PREFIX = ""
+LEECH_SUFFIX = ""
+LEECH_FONT = ""
+LEECH_CAPTION = ""
+THUMBNAIL_LAYOUT = ""
+# Bot PM/file-store delivery is fixed off in this build.
+MEDIA_STORE = False
+
+# Download engines
+DISABLE_TORRENTS = False
+DISABLE_LEECH = False
+DISABLE_BULK = False
+DISABLE_MULTI = False
+DISABLE_SEED = False
+DISABLE_FF_MODE = False
+DISABLE_MEGA = False
+DISABLE_JD = True
+DISABLE_NZB = True
+JD_EMAIL = ""
+JD_PASS = ""
+USENET_SERVERS = []
+TORRENT_TIMEOUT = 0
+BASE_URL = ""
+WEB_PINCODE = True
+WEB_ACCESS_PASSWORD = ""
+
+# Direct-download services (optional)
+DEBRID_LINK_API = ""
+FILELION_API = ""
+STREAMWISH_API = ""
+PROTECTED_API = ""
+INSTADL_API = ""
+MEGA_EMAIL = ""
+MEGA_PASSWORD = ""
+
+# Task limits (GB; 0 = unlimited)
+BOT_MAX_TASKS = 0
+USER_MAX_TASKS = 0
+USER_TIME_INTERVAL = 0
+QUEUE_ALL = 0
+QUEUE_DOWNLOAD = 0
+QUEUE_UPLOAD = 0
+DIRECT_LIMIT = 0
+MEGA_LIMIT = 0
+TORRENT_LIMIT = 0
+GD_DL_LIMIT = 0
+RC_DL_LIMIT = 0
+JD_LIMIT = 0
+NZB_LIMIT = 0
+LEECH_LIMIT = 0
+EXTRACT_LIMIT = 0
+ARCHIVE_LIMIT = 0
+STORAGE_LIMIT = 0
+
+# Processing and logs
+EXCLUDED_EXTENSIONS = ""
+NAME_SWAP = ""
+FFMPEG_CMDS = {}
+LINKS_LOG_ID = ""
+STATUS_LIMIT = 10
+STATUS_UPDATE_INTERVAL = 15
+INC_TASK_NOTIFY = False
+INC_TASK_RESUME = False
+
+# Images and updates
+USE_IMAGES = False
+IMAGES = []
+IMG_SEARCH = ""
+IMG_PAGE = 1
+IMG_SOURCES = ["wallpaperflare"]
+UPSTREAM_REPO = ""
+UPSTREAM_BRANCH = "wzv3"
+ENABLE_TELEMETRY = True
