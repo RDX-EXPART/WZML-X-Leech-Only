@@ -1,10 +1,13 @@
-FROM mysterysd/wzmlx:v3
+FROM gkbotzg/kpsmlx:v3
 
 WORKDIR /usr/src/app
 
-COPY requirements.txt .
-RUN uv pip install --python /wzvenv/bin/python --no-cache-dir -r requirements.txt
+RUN chmod 777 /usr/src/app
 
 COPY . .
 
-ENTRYPOINT ["bash", "start.sh"]
+RUN uv venv --system-site-packages
+
+RUN uv pip install --no-cache-dir -U -r requirements.txt
+
+CMD ["bash", "start.sh"]
